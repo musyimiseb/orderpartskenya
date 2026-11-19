@@ -1,7 +1,7 @@
 // server.js — OrderParts KE production backend
 const dns = require('dns');
 // Keep this line to prevent DNS issues on some networks
-dns.setServers(['8.8.8.8', '8.8.4.4']); 
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 require('dotenv').config();
 const express   = require('express');
@@ -18,20 +18,28 @@ const SEED = require('./seed');
 const app    = express();
 const PORT   = process.env.PORT || 3000;
 
-// 🚨 SECURITY FIX: Read secrets from environment variables (Render/.env)
+//  SECURITY FIX: Read secrets from environment variables (Render/.env)
 const MONGODB_URI = process.env.MONGODB_URI;
 const SECRET      = process.env.JWT_SECRET || 'dev-secret-change-me';
 const ADMIN_PASS  = process.env.ADMIN_PASSWORD || 'orderparts';
 
 if (!MONGODB_URI) {
-  console.error('❌ CRITICAL ERROR: MONGODB_URI is missing!');
-  console.error('👉 If running locally, check your .env file.');
-  console.error('👉 If on Render, check your Environment Variables settings.');
+  console.error(' CRITICAL ERROR: MONGODB_URI is missing!');
+  console.error(' If running locally, check your .env file.');
+  console.error('If on Render, check your Environment Variables settings.');
   process.exit(1);
 }
 
 /* ---------- middleware ---------- */
-app.use(cors());
+// CORS: permissive by default (current behaviour). To lock it to your domain,
+// set ALLOWED_ORIGINS in Render env vars, e.g.:
+//   ALLOWED_ORIGINS=https://orderpartske.com,https://www.orderpartske.com
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+app.use(cors({
+  origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true
+}));
 app.use(express.json({ limit: '25mb' }));
 app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
@@ -85,7 +93,7 @@ async function ensureProducts() {
   const count = await Product.estimatedDocumentCount();
   if (count === 0) {
     await Product.insertMany(SEED);
-    console.log(`📦 Seeded ${SEED.length} default products`);
+    console.log(` Seeded ${SEED.length} default products`);
   }
 }
 
@@ -191,6 +199,8 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid product id' });
+
   const body = { ...req.body };
   delete body._id; delete body.__v; delete body.id;
 
@@ -200,10 +210,30 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
   res.json(updated);
 });
 
+//  HARDENED DELETE — returns JSON, distinguishes 400 / 404 / 200
 app.delete('/api/products/:id', requireAdmin, async (req, res) => {
-  const id = Number(req.params.id);
-  await Product.deleteOne({ id });
-  res.status(204).end();
+  const raw = req.params.id;
+  const id  = Number(raw);
+
+  if (!Number.isFinite(id)) {
+    console.warn('DELETE /api/products -> invalid id:', raw);
+    return res.status(400).json({ error: 'Invalid product id', id: raw });
+  }
+
+  try {
+    const result = await Product.deleteOne({ id });
+
+    if (result.deletedCount === 0) {
+      console.warn('DELETE /api/products -> not found:', id);
+      return res.status(404).json({ error: 'Product not found', id });
+    }
+
+    console.log('🗑️  Deleted product id', id);
+    res.json({ ok: true, deleted: id });
+  } catch (err) {
+    console.error('DELETE /api/products -> error:', err);
+    res.status(500).json({ error: 'Delete failed', detail: err.message });
+  }
 });
 
 app.post('/api/products/bulk', requireAdmin, async (req, res) => {
@@ -246,24 +276,23 @@ app.get('*', (req, res, next) => {
    ============================================================ */
 async function startServer() {
   try {
-    console.log('⏳ Attempting to connect to MongoDB...');
-    
-    // Removed the debug flags (bufferCommands: false) for stable production behavior
+    console.log(' Attempting to connect to MongoDB...');
+
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 10000,
       autoSelectFamily: false
     });
-    
-    console.log('✅ MongoDB connected');
+
+    console.log(' MongoDB connected');
 
     await ensureAdmin();
     await ensureSettings();
     await ensureProducts();
 
-    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+    app.listen(PORT, () => console.log(` Server running on port ${PORT}`));
 
   } catch (err) {
-    console.error('\n❌ CONNECTION FAILED!');
+    console.error('\n CONNECTION FAILED!');
     console.error('Error Type:', err.name);
     console.error('Message:', err.message);
     process.exit(1);
