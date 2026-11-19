@@ -1646,9 +1646,10 @@ async function loadProducts() {
     var res = await fetch('/api/products', { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     var rows = await res.json();
-    if (!Array.isArray(rows) || !rows.length) throw new Error('empty');
+    if (!Array.isArray(rows)) throw new Error('bad payload');
     all = rows;
   } catch (e) {
+    console.warn('Products fetch failed — using fallback:', e.message);
     all = FALLBACK_PRODUCTS.map(function (p) { return Object.assign({}, p); });
   }
   renderAll();
@@ -2570,7 +2571,12 @@ async function apiAuth(url, opts) {
     var j = {}; try { j = await res.json(); } catch (e) {}
     throw new Error(j.error || 'Request failed');
   }
-  return res.json();
+  // 204 No Content has no body — return {} instead of crashing on res.json()
+  if (res.status === 204) return {};
+  var text = '';
+  try { text = await res.text(); } catch (e) {}
+  if (!text) return {};
+  try { return JSON.parse(text); } catch (e) { return {}; }
 }
 
 function readAsDataURL(file){
